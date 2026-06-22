@@ -43,6 +43,28 @@ def celsius_to_fahrenheit(temperature_c: float | None) -> float | None:
     
     return temperature_c * 9 / 5 + 32
 
+def calculate_lead_time_hours(retrieved_at: str, valid_time: str) -> int:
+    """Calculate forecast lead time in whole hours.
+
+    Parameters
+    ----------
+    retrieved_at : str
+        UTC timestamp when forecast data were retrieved.
+    valid_time : str
+        Forecast valid timestamp from the NWS hourly forecast period.
+
+    Returns
+    -------
+    int
+        Forecast lead time in hours.
+    """
+    retrieved_datetime = datetime.fromisoformat(retrieved_at)
+    valid_datetime = datetime.fromisoformat(valid_time)
+    
+    lead_time = valid_datetime - retrieved_datetime
+    
+    return round(lead_time.total_seconds() / 3600)
+
 def load_location(row: pd.Series) -> None:
     """Load forecast and observation data for a single location.
     
@@ -144,7 +166,7 @@ def load_location(row: pd.Series) -> None:
                     location_id,
                     retrieved_at,
                     period["startTime"],
-                    None,
+                    calculate_lead_time_hours(retrieved_at, period["startTime"]),
                     period.get("temperature"),
                     period.get("windSpeed"),
                     period.get("windDirection"),
