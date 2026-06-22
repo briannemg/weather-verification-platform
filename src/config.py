@@ -12,13 +12,17 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 
 # SQLite database path
-DATABASE_PATH = BASE_DIR / "weather_verification.db"
+DATABASE_PATH = DATA_DIR / "weather_verification.db"
 
-# National Weather Service API base URL
-NWS_BASE_URL = "https://api.weather.gov"
+# Locations file path
+LOCATIONS_FILE = BASE_DIR / "locations.csv"
 
-# Required headers for API requests
-HEADERS = {
-    "User-Agent": "weather-verification-platform (github portfolio project)",
-    "Accept": "application/geo+json",
-}
+# Open-Meteo Forecast URL
+OPEN_METEO_HISTORICAL_FORECAST_URL = (
+    "https://historical-forecast-api.open-meteo.com/v1/forecast"
+)
+
+# Open-Meteo Observations URL
+OPEN_METEO_ARCHIVE_URL = (
+    "https://archive-api.open-meteo.com/v1/archive"
+)
