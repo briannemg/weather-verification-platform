@@ -1,4 +1,4 @@
-location_id,name,latitude,longiture,timezone
+location_id,name,latitude,longitude,timezone
 central_kansas_test,Central Kansas Test,38.8500,-96.8500,America/Chicago
 front_range_test,Colorado Front Range Test,39.3000,-105.3000,America/Denver
 illinois_test,Northern Illinois Test,42.1000,-89.9000,America/Chicago
