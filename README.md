@@ -245,28 +245,29 @@ The project generates several analytical outputs for forecast evaluation.
 
 ## Example Workflow
 
-Initialize database:
+## Example Workflow
+
+Run the full end-to-end forecast verification pipeline:
 
 ```bash
-python -m src.database
+python -m src.run_pipeline
 ```
 
-Load archived forecast and historical weather data:
+The pipeline automatically performs the following workflow:
+
+1. Initialize SQLite database and create schema
+2. Retrieve archived forecast data from Open-Meteo Historical Forecast API
+3. Retrieve historical weather observations from Open-Meteo Historical Weather API
+4. Store normalized forecast and observation records in the database
+5. Match forecast and observed values by valid timestamp
+6. Calculate forecast verification metrics (Bias, MAE, RMSE)
+7. Save verification results to the database
+8. Generate visualization outputs for analysis
+
+To process a single configured location:
 
 ```bash
-python -m src.load_data
-```
-
-Run forecast verification analysis:
-
-```bash
-python -m src.verification
-```
-
-Generate visualization outputs:
-
-```bash
-python -m src.plots
+python -m src.run_pipeline --location central_kansas_test
 ```
 
 ---
