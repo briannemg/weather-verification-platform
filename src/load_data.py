@@ -1,16 +1,21 @@
-"""Data ingestion pipeline for the weather verification platform.
+"""Data ingestion pipeline for the forecast verification platform.
 
-This module retrieves forecast data and recent weather observations
-from the National Weather Service API and loads normalized records
-into the project SQLite database.
+This module retrieves historical forecast data and corresponding
+historical weather observations from the Open-Meteo API and loads
+normalized records into the project SQLite database.
 
 The ingestion workflow includes:
 
-- Reading configured test locations
-- Identifying nearest observation stations
-- Retrieving hourly forecast data
-- Retrieving recent station observations
-- Storing normalized records for later verification analysis
+- Reading configured analysis locations
+- Retrieving archived forecast temperature data
+- Retrieving historical observed weather data
+- Loading normalized forecast records into the forecasts table
+- Loading normalized observed weather records into the observations table
+- Preparing matched datasets for downstream verification analysis
+
+The resulting database serves as the foundation for forecast skill
+evaluation, including bias, mean absolute error (MAE), root mean
+square error (RMSE), and future visualization workflows.
 """
 
 from datetime import datetime, timezone
@@ -18,78 +23,18 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from src.database import get_connection
-from src.nws_api import (
-    get_hourly_forecast,
-    get_station_observations,
-    select_nearest_station,
-)
+from src.open_meteo_api import get_historical_forecast, get_historical_weather
 
-def celsius_to_fahrenheit(temperature_c: float | None) -> float | None:
-    """Convert temperature from Celsius to Fahrenheit.
-
-    Parameters
-    ----------
-    temperature_c : float or None
-        Temperature value in degrees Celsius.
-
-    Returns
-    -------
-    float or None
-        Temperature converted to degrees Fahrenheit.
-        Returns None if the input value is None.
-    """
-    if temperature_c is None:
-        return None
-    
-    return temperature_c * 9 / 5 + 32
-
-def calculate_lead_time_hours(retrieved_at: str, valid_time: str) -> int:
-    """Calculate forecast lead time in whole hours.
-
-    Parameters
-    ----------
-    retrieved_at : str
-        UTC timestamp when forecast data were retrieved.
-    valid_time : str
-        Forecast valid timestamp from the NWS hourly forecast period.
-
-    Returns
-    -------
-    int
-        Forecast lead time in hours.
-    """
-    retrieved_datetime = datetime.fromisoformat(retrieved_at)
-    valid_datetime = datetime.fromisoformat(valid_time)
-    
-    lead_time = valid_datetime - retrieved_datetime
-    
-    return round(lead_time.total_seconds() / 3600)
+START_DATE = "2026-06-01"
+END_DATE = "2026-06-15"
 
 def load_location(row: pd.Series) -> None:
-    """Load forecast and observation data for a single location.
-    
-    Retrieves forecast data and recent weather observations for a
-    configured location, identifies the nearest observation station,
-    and stores all retrieved data in the project database.
-    
-    Data written to the database includes:
-    
-    - Location metadata
-    - Observation station metadata
-    - Location-to-station mapping
-    - Hourly forecast records
-    - Recent station observation records
-    
+    """Load historical forecast and observed weather data for one location.
+
     Parameters
     ----------
-    row : pandas.Series
-        Row from the locations.csv configuration file containing:
-        
-        - location_id
-        - name
-        - latitude
-        - longitude
-        - timezone
+    row : pd.Series
+        Location configuration row from locations.csv
         
     Returns
     -------
@@ -101,18 +46,35 @@ def load_location(row: pd.Series) -> None:
     latitude = row["latitude"]
     longitude = row["longitude"]
     
-    # Retrieve forecast and observation data from NWS API
-    station = select_nearest_station(latitude, longitude)
-    forecasts = get_hourly_forecast(
-        station["latitude"],
-        station["longitude"],
+    forecast_data = get_historical_forecast(
+        latitude=latitude,
+        longitude=longitude,
+        start_date=START_DATE,
+        end_date=END_DATE,
     )
-    observations = get_station_observations(station["station_id"])
     
-    # Open database connection and store normalized records
+    observed_data = get_historical_weather(
+        latitude=latitude,
+        longitude=longitude,
+        start_date=START_DATE,
+        end_date=END_DATE,
+    )
+    
+    forecast_df = pd.DataFrame(
+        {
+            "valid_time": forecast_data["hourly"]["time"],
+            "temperature_f": forecast_data["hourly"]["temperature_2m"],
+        }
+    )
+    
+    observed_df = pd.DataFrame(
+        {
+            "valid_time": observed_data["hourly"]["time"],
+            "temperature_f": observed_data["hourly"]["temperature_2m"],
+        }
+    )
+    
     with get_connection() as connection:
-        
-        # Store location metadata
         connection.execute(
             """
             INSERT OR REPLACE INTO locations
@@ -122,113 +84,50 @@ def load_location(row: pd.Series) -> None:
             (location_id, row["name"], latitude, longitude, row["timezone"]),
         )
         
-        # Store station metadata
-        connection.execute(
-            """
-            INSERT OR REPLACE INTO stations
-            (station_id, name, latitude, longitude)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                station["station_id"],
-                station["name"],
-                station["latitude"],
-                station["longitude"],
-            ),
-        )
-        
-        # Connect location and station data
-        connection.execute(
-            """
-            INSERT OR REPLACE INTO location_stations
-            (location_id, station_id, distance_km, selected_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                location_id,
-                station["station_id"],
-                station["distance_km"],
-                retrieved_at,
-            ),
-        )
-        
-        # Store forecast records
-        for period in forecasts:
+        for _, forecast in forecast_df.iterrows():
             connection.execute(
                 """
                 INSERT INTO forecasts
-                (location_id, generated_at, valid_time, lead_time_hours,
-                temperature_f, wind_speed, wind_direction, short_forecast,
-                detailed_forecast, retrieved_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (location_id, valid_time, temperature_f, retrieved_at)
+                VALUES (?, ?, ?, ?)
                 """,
                 (
                     location_id,
-                    retrieved_at,
-                    period["startTime"],
-                    calculate_lead_time_hours(retrieved_at, period["startTime"]),
-                    period.get("temperature"),
-                    period.get("windSpeed"),
-                    period.get("windDirection"),
-                    period.get("shortForecast"),
-                    period.get("detailedForecast"),
+                    forecast["valid_time"],
+                    forecast["temperature_f"],
                     retrieved_at,
                 ),
             )
             
-        # Store observation records
-        for obs in observations:
-            props = obs["properties"]
-            temperature_c = props.get("temperature", {}).get("value")
-            
+        for _, observation in observed_df.iterrows():
             connection.execute(
                 """
                 INSERT INTO observations
-                (station_id, valid_time, temperature_c, temperature_f,
-                text_description, retrieved_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (location_id, valid_time, temperature_f, retrieved_at)
+                VALUES (?, ?, ?, ?)
                 """,
                 (
-                    station["station_id"],
-                    props.get("timestamp"),
-                    temperature_c,
-                    celsius_to_fahrenheit(temperature_c),
-                    props.get("textDescription"),
+                    location_id,
+                    observation["valid_time"],
+                    observation["temperature_f"],
                     retrieved_at,
                 ),
             )
             
     print(f"Loaded location: {location_id}")
-    print(f"Nearest station: {station['station_id']} - {station['name']}")
-    print(f"Distance: {station['distance_km']:.2f} km")
+    print(f"Forecast rows: {len(forecast_df)}")
+    print(f"Observed rows: {len(observed_df)}")
     
 def main(location_id: str | None = None) -> None:
-    """Load data for onfigured locations.
-    
-    Reads configured locations from locations.csv and executes the
-    data ingestion pipeline for each location.
-    
-    If a specific location_id is provided, only that location is
-    processed. Otherwise, all configured locations are loaded.
-    
-    Parameters
-    ----------
-    location_id : str or None, optional
-        Identifier of a specific location to process.
-        If None, all configured locations are processed.
-        
-    Returns
-    -------
-    None
-    """
+    """Load Open-Meteo data for one or all configured locations."""
     locations = pd.read_csv("locations.csv")
     
     if location_id is not None:
         locations = locations[locations["location_id"] == location_id]
         
-    for _, row in locations.iterrows():
-        load_location(row)
-        
-        
+        for _, row in locations.iterrows():
+            load_location(row)
+            
+            
 if __name__ == "__main__":
     main("central_kansas_test")
